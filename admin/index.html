@@ -4058,7 +4058,7 @@
                 }
                 transacciones.push({
                     tipo: 'compra', fechaISO: c.fechaISO, fecha: c.fecha || '', hora: c.hora || '',
-                    timestamp: c.timestamp || 0, monto: -c.totalUSD, descripcion,
+                    timestamp: c.timestamp || 0, monto: -c.totalUSD, descripcion, compraRef: c,
                     metodoLabel: c.esPorPagar ? 'Crédito' : (METODO_LABELS[c.metodoPago] || 'Efectivo'),
                     estado: calcularEstadoPagoProveedorItem(c),
                     metodos: c.esPorPagar ? [] : [{ metodo: c.metodoPago || 'efectivo', monto: c.totalUSD }]
@@ -4090,6 +4090,10 @@
             } else if (t.tipo === 'gasto' && t.gastoRef) {
                 row.style.cursor = 'pointer';
                 row.addEventListener('click', () => abrirDetalleGasto(t.gastoRef));
+            }
+            if (t.tipo === 'compra' && t.compraRef) {
+                row.style.cursor = 'pointer';
+                row.addEventListener('click', () => abrirDetalleCompra(t.compraRef));
             }
             return row;
         }
@@ -4361,6 +4365,10 @@
                         } else if (t.tipo === 'gasto' && t.gastoRef) {
                             item.style.cursor = 'pointer';
                             item.addEventListener('click', (e) => { e.stopPropagation(); abrirDetalleGasto(t.gastoRef); });
+                        }
+                        if (t.tipo === 'compra' && t.compraRef) {
+                            item.style.cursor = 'pointer';
+                            item.addEventListener('click', (e) => { e.stopPropagation(); abrirDetalleCompra(t.compraRef); });
                         }
                         sec.appendChild(item);
                     });
@@ -9164,6 +9172,614 @@
 
         window.addEventListener('online', () => mostrarBannerConexion(true));
         window.addEventListener('offline', () => mostrarBannerConexion(false));
+
+        // ============================================================================
+        // COMPRAS DE MERCANCÍA: VARIANTES + DETALLE / EDICIÓN / ELIMINACIÓN
+        // ----------------------------------------------------------------------------
+        // Este bloque va DESPUÉS del flujo original de "Registrar compras", y por eso
+        // sus versiones de renderCompraProducts, updateCompraCartBar, renderNuevaCompraPago
+        // y del botón de confirmar compra son las que mandan (las de arriba quedan sin uso).
+        // Qué agrega:
+        //  1) Al comprar un producto con variantes, se eligen las variantes (y su cantidad).
+        //  2) Al tocar una compra en Balance se abre su detalle, con editar y eliminar.
+        //  3) Al eliminar o editar una compra, el inventario se corrige solo.
+        // ============================================================================
+        const compraFmt = n => (parseFloat(n) || 0).toFixed(2);
+
+        // Llave del carrito: "12" para un producto simple, "12|0|2" para una variante
+        // (id del producto | número de grupo | número de opción).
+        function compraClave(prodId, gIdx, oIdx) {
+            return (gIdx === null || gIdx === undefined) ? String(prodId) : `${prodId}|${gIdx}|${oIdx}`;
+        }
+
+        function compraResolverClave(clave) {
+            const partes = String(clave).split('|');
+            const prod = products.find(p => String(p.id) === partes[0]);
+            if (!prod) return null;
+            if (partes.length === 1) {
+                return { prod, gIdx: null, oIdx: null, opt: null, grupo: null, costo: parseFloat(prod.buyPrice) || 0, nombre: prod.name };
+            }
+            const gIdx = parseInt(partes[1], 10), oIdx = parseInt(partes[2], 10);
+            const grupo = prod.variantGroups && prod.variantGroups[gIdx];
+            const opt = grupo && grupo.options && grupo.options[oIdx];
+            if (!opt) return null;
+            return { prod, gIdx, oIdx, opt, grupo, costo: parseFloat(opt.cost) || parseFloat(prod.buyPrice) || 0, nombre: `${prod.name} (${opt.option})` };
+        }
+
+        // Suma (delta positivo) o resta (delta negativo) unidades al inventario.
+        function compraAplicarStock(r, delta) {
+            const prod = r.prod;
+            if (r.opt) {
+                r.opt.quantity = Math.max(0, (parseInt(r.opt.quantity) || 0) + delta);
+                prod.quantity = prod.variantGroups.reduce((s, g) => s + (g.options || []).reduce((s2, o) => s2 + (parseInt(o.quantity) || 0), 0), 0);
+            } else {
+                prod.quantity = Math.max(0, (parseInt(prod.quantity) || 0) + delta);
+            }
+        }
+
+        function compraItemDesde(r, qty, costo) {
+            return {
+                productId: r.prod.id, groupIndex: r.gIdx, optionIndex: r.oIdx,
+                groupName: r.grupo ? r.grupo.name : null, optionName: r.opt ? r.opt.option : null,
+                productName: r.nombre, qty, buyPrice: costo
+            };
+        }
+
+        // Encuentra el producto/variante al que corresponde un renglón YA guardado en una compra.
+        // Las compras antiguas solo guardaron el nombre; las nuevas guardan el id y la variante.
+        function compraResolverItem(it) {
+            if (it.productId === undefined || it.productId === null) {
+                const prod = products.find(p => p.name === it.productName);
+                return prod ? compraResolverClave(String(prod.id)) : null;
+            }
+            if (it.groupIndex === null || it.groupIndex === undefined) return compraResolverClave(String(it.productId));
+            const prod = products.find(p => String(p.id) === String(it.productId));
+            if (!prod || !prod.variantGroups) return null;
+            let gi = it.groupIndex, oi = it.optionIndex;
+            let g = prod.variantGroups[gi];
+            let o = g && g.options && g.options[oi];
+            if (!o || (it.optionName && o.option !== it.optionName)) {
+                // Si cambiaste las variantes después de comprar, se busca por nombre.
+                gi = prod.variantGroups.findIndex(x => x.name === it.groupName);
+                g = gi !== -1 ? prod.variantGroups[gi] : null;
+                oi = g ? (g.options || []).findIndex(x => x.option === it.optionName) : -1;
+                if (oi === -1) return null;
+            }
+            return compraResolverClave(compraClave(prod.id, gi, oi));
+        }
+
+        function compraCantidadEnCarrito(prod) {
+            return Object.entries(compraCart)
+                .filter(([k]) => k === String(prod.id) || k.startsWith(prod.id + '|'))
+                .reduce((a, [, q]) => a + q, 0);
+        }
+
+        // ---------------- Pantalla de selección de productos (con variantes) ----------------
+        function renderCompraProducts() {
+            const listContainer = document.getElementById('compra-product-list');
+            listContainer.innerHTML = '';
+            let processedList = [...products];
+
+            if (compraFilter === 'low-stock') {
+                processedList = processedList.filter(p => p.quantity <= p.minStock);
+            } else if (compraFilter === 'category') {
+                processedList = processedList.filter(p => p.category === compraSelectedCategoryFilter);
+            }
+
+            if (compraSortOrder === 'desc') processedList.sort((a, b) => b.quantity - a.quantity);
+            else if (compraSortOrder === 'asc') processedList.sort((a, b) => a.quantity - b.quantity);
+
+            if (products.length === 0) {
+                listContainer.innerHTML = '<div class="empty-state">No hay productos en el inventario. Crea uno primero.</div>';
+                updateCompraCartBar();
+                return;
+            } else if (processedList.length === 0) {
+                listContainer.innerHTML = '<div class="empty-state">No hay productos que coincidan con este filtro.</div>';
+                updateCompraCartBar();
+                return;
+            }
+
+            processedList.forEach(prod => {
+                const conVariantes = productHasVariants(prod.variantGroups);
+                const enCarrito = compraCantidadEnCarrito(prod);
+                const card = document.createElement('div');
+                card.className = 'product-card';
+
+                const img = getProductImages(prod)[0];
+                const imageContent = img ? `<img src="${img}" alt="${movEsc(prod.name)}">` : movEsc((prod.name || '?').charAt(0).toUpperCase());
+                const pillClass = prod.quantity <= prod.minStock ? 'product-pill alert' : 'product-pill normal';
+                const costoTxt = conVariantes ? 'Elige las variantes que compraste' : `Costo: $${compraFmt(prod.buyPrice)} c/u`;
+
+                const controles = conVariantes ? `
+                    <div class="stepper-container" onclick="event.stopPropagation()">
+                        <span class="stepper-value" id="compra-qty-val-${prod.id}">${enCarrito}</span>
+                        <button type="button" class="stepper-btn btn-variantes-compra"><i class="fi fi-rr-plus"></i></button>
+                    </div>` : `
+                    <div class="stepper-container" onclick="event.stopPropagation()">
+                        <button type="button" class="stepper-btn btn-minus-compra" data-id="${prod.id}"><i class="fi fi-rr-minus"></i></button>
+                        <span class="stepper-value" id="compra-qty-val-${prod.id}">${enCarrito}</span>
+                        <button type="button" class="stepper-btn btn-plus-compra" data-id="${prod.id}"><i class="fi fi-rr-plus"></i></button>
+                    </div>`;
+
+                card.innerHTML = `
+                    <div class="product-img">${imageContent}</div>
+                    <div class="product-details">
+                        <div class="product-title">${movEsc(prod.name)}</div>
+                        <div class="${pillClass}">${prod.quantity} en stock</div>
+                        <div class="product-price-info">${costoTxt}</div>
+                    </div>
+                    ${controles}
+                `;
+
+                if (conVariantes) {
+                    const abrir = (e) => { e.stopPropagation(); abrirSelectorVariantesCompra(prod, 'nueva'); };
+                    card.querySelector('.btn-variantes-compra').addEventListener('click', abrir);
+                    card.addEventListener('click', abrir);
+                } else {
+                    const k = String(prod.id);
+                    card.querySelector('.btn-minus-compra').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if ((compraCart[k] || 0) > 0) {
+                            compraCart[k]--;
+                            if (compraCart[k] === 0) delete compraCart[k];
+                            document.getElementById(`compra-qty-val-${prod.id}`).innerText = compraCart[k] || 0;
+                            updateCompraCartBar();
+                        }
+                    });
+                    card.querySelector('.btn-plus-compra').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        compraCart[k] = (compraCart[k] || 0) + 1;
+                        document.getElementById(`compra-qty-val-${prod.id}`).innerText = compraCart[k];
+                        updateCompraCartBar();
+                    });
+                }
+
+                listContainer.appendChild(card);
+            });
+
+            updateCompraCartBar();
+        }
+
+        function updateCompraCartBar() {
+            let totalItems = 0, totalCostoUSD = 0;
+            for (const [clave, qty] of Object.entries(compraCart)) {
+                const r = compraResolverClave(clave);
+                if (r) {
+                    totalItems += qty;
+                    totalCostoUSD += qty * r.costo;
+                }
+            }
+            const bar = document.getElementById('compra-bottom-bar-action');
+            document.getElementById('compra-total-count-badge').innerText = totalItems;
+            document.getElementById('compra-total-price-display').innerText = `$${totalCostoUSD.toFixed(2)}`;
+            bar.classList.toggle('active-state', totalItems > 0);
+        }
+
+        function renderNuevaCompraPago() {
+            document.getElementById('btn-compra-pagado').classList.toggle('active', !compraEsPorPagar);
+            document.getElementById('btn-compra-por-pagar').classList.toggle('active', compraEsPorPagar);
+            document.getElementById('compra-metodo-section').style.display = compraEsPorPagar ? 'none' : 'block';
+            document.getElementById('compra-proveedor-section').style.display = compraEsPorPagar ? 'block' : 'none';
+            buildCompraPaymentMethods();
+
+            let totalItems = 0, totalCosto = 0;
+            const itemsResumen = [];
+            for (const [clave, qty] of Object.entries(compraCart)) {
+                const r = compraResolverClave(clave);
+                if (r) {
+                    totalItems += qty;
+                    totalCosto += qty * r.costo;
+                    itemsResumen.push({ name: r.nombre, qty, buyPrice: r.costo });
+                }
+            }
+
+            document.getElementById('compra-total-usd').innerText = `$${totalCosto.toFixed(2)}`;
+            document.getElementById('compra-total-bs').innerText = `Bs ${(totalCosto * tasaBCVOficial).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+            document.getElementById('crear-compra-count-badge').innerText = totalItems;
+            document.getElementById('crear-compra-total-display').innerText = `$${totalCosto.toFixed(2)}`;
+
+            const resumenContainer = document.getElementById('compra-resumen-items');
+            resumenContainer.innerHTML = '';
+            itemsResumen.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'deuda-item-row';
+                row.innerHTML = `
+                    <div class="deuda-item-icon"><i class="fi fi-rr-box"></i></div>
+                    <div class="deuda-item-info">
+                        <div class="deuda-item-title">${item.qty} ${movEsc(item.name)}</div>
+                        <div class="deuda-item-sub">Costo unitario: $${item.buyPrice.toFixed(2)}</div>
+                    </div>
+                    <div class="deuda-item-amount">$${(item.qty * item.buyPrice).toFixed(2)}</div>
+                `;
+                resumenContainer.appendChild(row);
+            });
+        }
+
+        // Confirmar una compra nueva (reemplaza al botón original, ver más abajo).
+        async function confirmarCompraNueva() {
+            let totalItems = 0, totalCosto = 0;
+            const lineas = [];
+            for (const [clave, qty] of Object.entries(compraCart)) {
+                const r = compraResolverClave(clave);
+                if (r && qty > 0) {
+                    totalItems += qty;
+                    totalCosto += qty * r.costo;
+                    lineas.push({ r, qty });
+                }
+            }
+            if (totalItems === 0) return;
+
+            let proveedorId = null;
+            if (compraEsPorPagar) {
+                const nombreProveedor = document.getElementById('compra-proveedor-input').value.trim();
+                if (!nombreProveedor) {
+                    await customAlert("Ingresa el nombre del proveedor.", "Campo requerido");
+                    return;
+                }
+                let prov = proveedores.find(p => p.name.toLowerCase() === nombreProveedor.toLowerCase());
+                if (!prov) {
+                    prov = { id: Date.now(), name: nombreProveedor };
+                    proveedores.push(prov);
+                }
+                proveedorId = prov.id;
+            }
+
+            // Aumentar el stock del inventario (por variante o por producto simple)
+            lineas.forEach(({ r, qty }) => compraAplicarStock(r, qty));
+
+            const fechaISO = getFechaISO();
+            const fecha = formatearFechaCorta();
+
+            compras.push({
+                id: Date.now(),
+                timestamp: Date.now(),
+                fechaISO, fecha,
+                hora: new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true }),
+                totalUSD: totalCosto,
+                esPorPagar: compraEsPorPagar,
+                metodoPago: compraEsPorPagar ? null : compraMetodoPago,
+                proveedorId,
+                items: lineas.map(({ r, qty }) => compraItemDesde(r, qty, r.costo))
+            });
+
+            if (compraEsPorPagar) {
+                lineas.forEach(({ r, qty }) => {
+                    gastoDeudaItems.push({
+                        id: Date.now() + Math.random(),
+                        compraId: compras[compras.length - 1].id,
+                        proveedorId,
+                        descripcion: `${qty} ${r.nombre} (compra)`,
+                        montoUSD: qty * r.costo,
+                        fecha
+                    });
+                });
+            }
+
+            compraCart = {};
+            compraEsPorPagar = false;
+            compraMetodoPago = 'efectivo';
+            document.getElementById('compra-proveedor-input').value = '';
+
+            await customAlert(`Compra registrada por $${totalCosto.toFixed(2)}. El inventario fue actualizado.`, "¡Compra registrada!");
+            switchTab('inventario');
+        }
+
+        // Se cambia el botón original por una copia limpia (así se elimina su acción vieja)
+        // y se le conecta la acción nueva.
+        (function () {
+            const viejo = document.getElementById('crear-compra-bottom-bar');
+            if (!viejo) return;
+            const nuevo = viejo.cloneNode(true);
+            viejo.parentNode.replaceChild(nuevo, viejo);
+            nuevo.addEventListener('click', confirmarCompraNueva);
+        })();
+
+        // ---------------- Ventanas nuevas (se crean aquí, no hace falta tocar el HTML) ----------------
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="modal-overlay" id="modal-compra-variantes">
+                <div class="category-modal-box" style="max-width: 460px;">
+                    <div class="sheet-grabber"></div>
+                    <div class="cat-modal-header"><h3 id="cvp-nombre">Variantes</h3><button class="cat-close-x" id="btn-cvp-cerrar">&times;</button></div>
+                    <div style="font-size: 0.8rem; color: var(--text-light);">Indica cuántas unidades compraste de cada variante.</div>
+                    <div id="cvp-lista"></div>
+                    <button class="btn-create-category-action" id="btn-cvp-listo">Listo</button>
+                </div>
+            </div>
+            <div class="modal-overlay" id="modal-compra-prod-picker">
+                <div class="category-modal-box" style="max-width: 460px;">
+                    <div class="sheet-grabber"></div>
+                    <div class="cat-modal-header"><h3>Agregar producto</h3><button class="cat-close-x" id="btn-cpp-cerrar">&times;</button></div>
+                    <div class="cat-options-list" id="cpp-lista"></div>
+                </div>
+            </div>
+            <div class="modal-overlay" id="modal-compra-editar">
+                <div class="category-modal-box" style="max-width: 460px;">
+                    <div class="sheet-grabber"></div>
+                    <div class="cat-modal-header"><h3>Editar compra</h3><button class="cat-close-x" id="btn-cedit-cerrar">&times;</button></div>
+                    <div style="font-size: 0.8rem; color: var(--text-light);">Cambia las cantidades. Con "−" hasta llegar a 0 se quita el producto.</div>
+                    <div id="cedit-lineas"></div>
+                    <button type="button" class="btn-create-category-action" id="btn-cedit-agregar" style="background: var(--bg-app); color: var(--text-dark); box-shadow: none;">+ Agregar producto</button>
+                    <div style="display: flex; justify-content: space-between; font-weight: 700;"><span>Total de la compra</span><span id="cedit-total">$0.00</span></div>
+                    <button class="btn-create-category-action" id="btn-cedit-guardar">Guardar cambios</button>
+                </div>
+            </div>
+        `);
+
+        // ---------------- Selector de variantes (compartido) ----------------
+        let cvp = null; // { prod, destino: 'nueva' | 'editar', cant: { 'g-o': qty } }
+
+        function abrirSelectorVariantesCompra(prod, destino) {
+            const cant = {};
+            const origen = destino === 'nueva' ? compraCart : (compraEdit ? compraEdit.lineas : {});
+            Object.entries(origen).forEach(([k, q]) => {
+                const p = k.split('|');
+                if (p.length === 3 && p[0] === String(prod.id)) cant[`${p[1]}-${p[2]}`] = q;
+            });
+            cvp = { prod, destino, cant };
+            document.getElementById('cvp-nombre').innerText = prod.name;
+            renderSelectorVariantesCompra();
+            openModal('modal-compra-variantes');
+        }
+
+        function renderSelectorVariantesCompra() {
+            const lista = document.getElementById('cvp-lista');
+            lista.innerHTML = '';
+            cvp.prod.variantGroups.forEach((g, gi) => (g.options || []).forEach((o, oi) => {
+                const k = `${gi}-${oi}`;
+                const costo = parseFloat(o.cost) || parseFloat(cvp.prod.buyPrice) || 0;
+                const fila = document.createElement('div');
+                fila.className = 'pv-variant-row';
+                fila.innerHTML = `
+                    <div>
+                        <div class="pv-variant-name">${movEsc(o.option)}</div>
+                        <div class="pv-variant-price">${g.name ? movEsc(g.name) + ' · ' : ''}Costo $${compraFmt(costo)} · En stock: ${parseInt(o.quantity) || 0}</div>
+                    </div>
+                    <div class="stepper-container">
+                        <button type="button" class="stepper-btn cvp-menos"><i class="fi fi-rr-minus"></i></button>
+                        <span class="stepper-value">${cvp.cant[k] || 0}</span>
+                        <button type="button" class="stepper-btn cvp-mas"><i class="fi fi-rr-plus"></i></button>
+                    </div>
+                `;
+                const valor = fila.querySelector('.stepper-value');
+                fila.querySelector('.cvp-menos').addEventListener('click', () => {
+                    cvp.cant[k] = Math.max(0, (cvp.cant[k] || 0) - 1);
+                    valor.innerText = cvp.cant[k];
+                });
+                fila.querySelector('.cvp-mas').addEventListener('click', () => {
+                    cvp.cant[k] = (cvp.cant[k] || 0) + 1;
+                    valor.innerText = cvp.cant[k];
+                });
+                lista.appendChild(fila);
+            }));
+        }
+
+        document.getElementById('btn-cvp-cerrar').addEventListener('click', () => { closeModal('modal-compra-variantes'); });
+        document.getElementById('btn-cvp-listo').addEventListener('click', async () => {
+            if (!cvp) return;
+            const { prod, destino, cant } = cvp;
+            const mapa = destino === 'nueva' ? compraCart : compraEdit.lineas;
+            Object.keys(mapa).forEach(k => { if (k.startsWith(prod.id + '|')) delete mapa[k]; });
+            Object.entries(cant).forEach(([k, q]) => {
+                if (q > 0) { const [gi, oi] = k.split('-'); mapa[`${prod.id}|${gi}|${oi}`] = q; }
+            });
+            await closeModal('modal-compra-variantes');
+            if (destino === 'nueva') renderCompraProducts(); else renderEdicionCompra();
+        });
+
+        // ---------------- Detalle de una compra ----------------
+        function abrirDetalleCompra(c) {
+            const prov = c.proveedorId ? proveedores.find(p => p.id === c.proveedorId) : null;
+            const estado = calcularEstadoPagoProveedorItem(c);
+            const items = c.items || [];
+            const filas = [
+                { icono: 'calendar', label: 'Fecha y hora', value: `${c.hora ? c.hora + ' | ' : ''}${c.fecha || ''}` },
+                { icono: 'credit-card', label: 'Método de pago', value: c.esPorPagar ? 'Crédito' : (METODO_LABELS[c.metodoPago] || 'Efectivo') }
+            ];
+            if (prov) filas.push({ icono: 'user', label: 'Proveedor', value: prov.name });
+            items.forEach(it => filas.push({ icono: 'box', label: `${it.qty} ${it.productName}`, value: `${compraFmt(it.qty * it.buyPrice)} $` }));
+
+            let concepto;
+            if (items.length === 1) concepto = `${items[0].qty} ${items[0].productName} (compra)`;
+            else if (items.length > 1) concepto = `Compra de ${items.length} productos`;
+            else concepto = prov ? `Compra a ${prov.name}` : 'Compra de inventario';
+
+            abrirMovDetalle({
+                titulo: 'Detalle de la compra',
+                resumenTitulo: 'Resumen de la compra',
+                sub: `Compra #${compras.indexOf(c) + 1}`,
+                concepto,
+                total: `${compraFmt(c.totalUSD)} $`,
+                statusText: c.esPorPagar ? (estado === 'pagado' ? 'Pagado' : (estado === 'parcial' ? 'Abono parcial' : 'Por pagar')) : 'Pagado',
+                statusClass: (c.esPorPagar && estado !== 'pagado') ? estado : '',
+                filas,
+                onEditar: async () => { abrirEdicionCompra(c); },
+                onEliminar: async () => {
+                    const ok = await customConfirm('¿Eliminar esta compra? Se quitará del balance y el inventario volverá a descontar las unidades que esta compra había sumado' + (c.esPorPagar ? '. También se quitará de las cuentas por pagar.' : '.'), 'Eliminar compra', 'Eliminar');
+                    if (!ok) return;
+                    compraRevertirStock(c);
+                    gastoDeudaItems = gastoDeudaItems.filter(d => d.compraId !== c.id);
+                    compras = compras.filter(x => x !== c);
+                    await closeModal('modal-mov-detalle');
+                    movActivo = null;
+                    renderProducts();
+                    guardarYSincronizar();
+                    refrescarVistasActivas();
+                    await customAlert('La compra fue eliminada y el inventario se actualizó.', 'Compra eliminada');
+                }
+            });
+        }
+
+        function compraRevertirStock(c) {
+            (c.items || []).forEach(it => {
+                const r = compraResolverItem(it);
+                if (r) compraAplicarStock(r, -(parseInt(it.qty) || 0));
+            });
+        }
+
+        // ---------------- Edición de una compra ----------------
+        let compraEdit = null; // { compra, lineas: { clave: qty }, costos: { clave: costoUnitario }, fijos: [renglones que ya no existen en el inventario] }
+
+        function abrirEdicionCompra(c) {
+            const ed = { compra: c, lineas: {}, costos: {}, fijos: [] };
+            (c.items || []).forEach(it => {
+                const r = compraResolverItem(it);
+                if (!r) { ed.fijos.push(it); return; }
+                const k = compraClave(r.prod.id, r.gIdx, r.oIdx);
+                ed.lineas[k] = (ed.lineas[k] || 0) + (parseInt(it.qty) || 0);
+                ed.costos[k] = parseFloat(it.buyPrice) || 0;
+            });
+            compraEdit = ed;
+            renderEdicionCompra();
+            openModal('modal-compra-editar');
+        }
+
+        function renderEdicionCompra() {
+            const ed = compraEdit;
+            if (!ed) return;
+            const cont = document.getElementById('cedit-lineas');
+            cont.innerHTML = '';
+            let total = 0, hayLineas = false;
+
+            Object.keys(ed.lineas).forEach(k => {
+                const r = compraResolverClave(k);
+                if (!r) return;
+                const qty = ed.lineas[k];
+                const costo = ed.costos[k] !== undefined ? ed.costos[k] : r.costo;
+                total += qty * costo;
+                hayLineas = true;
+                const fila = document.createElement('div');
+                fila.className = 'pv-variant-row';
+                fila.innerHTML = `
+                    <div>
+                        <div class="pv-variant-name">${movEsc(r.nombre)}</div>
+                        <div class="pv-variant-price">Costo unitario: $${compraFmt(costo)}</div>
+                    </div>
+                    <div class="stepper-container">
+                        <button type="button" class="stepper-btn cedit-menos"><i class="fi fi-rr-minus"></i></button>
+                        <span class="stepper-value">${qty}</span>
+                        <button type="button" class="stepper-btn cedit-mas"><i class="fi fi-rr-plus"></i></button>
+                    </div>
+                `;
+                fila.querySelector('.cedit-menos').addEventListener('click', () => {
+                    ed.lineas[k] = ed.lineas[k] - 1;
+                    if (ed.lineas[k] <= 0) delete ed.lineas[k];
+                    renderEdicionCompra();
+                });
+                fila.querySelector('.cedit-mas').addEventListener('click', () => {
+                    ed.lineas[k] = ed.lineas[k] + 1;
+                    renderEdicionCompra();
+                });
+                cont.appendChild(fila);
+            });
+
+            ed.fijos.forEach(it => {
+                total += (parseInt(it.qty) || 0) * (parseFloat(it.buyPrice) || 0);
+                hayLineas = true;
+                const fila = document.createElement('div');
+                fila.className = 'pv-variant-row';
+                fila.innerHTML = `
+                    <div>
+                        <div class="pv-variant-name">${it.qty} ${movEsc(it.productName)}</div>
+                        <div class="pv-variant-price">Este producto ya no está en el inventario; se conserva tal cual.</div>
+                    </div>
+                `;
+                cont.appendChild(fila);
+            });
+
+            if (!hayLineas) cont.innerHTML = '<div class="empty-state">No quedan productos en esta compra. Agrega uno o cierra esta ventana.</div>';
+            document.getElementById('cedit-total').innerText = `$${total.toFixed(2)}`;
+        }
+
+        function abrirSelectorProductoCompra() {
+            const lista = document.getElementById('cpp-lista');
+            lista.innerHTML = '';
+            if (!products.length) {
+                lista.innerHTML = '<div class="empty-state">No hay productos en el inventario.</div>';
+            }
+            products.forEach(prod => {
+                const conVar = productHasVariants(prod.variantGroups);
+                const item = document.createElement('div');
+                item.className = 'cat-option-item';
+                item.innerHTML = `<span>${movEsc(prod.name)}<br><small style="color: var(--text-light);">${conVar ? 'Tiene variantes' : 'Costo: $' + compraFmt(prod.buyPrice)} · ${prod.quantity} en stock</small></span>`;
+                item.addEventListener('click', async () => {
+                    await closeModal('modal-compra-prod-picker');
+                    if (conVar) {
+                        abrirSelectorVariantesCompra(prod, 'editar');
+                    } else {
+                        const k = String(prod.id);
+                        compraEdit.lineas[k] = (compraEdit.lineas[k] || 0) + 1;
+                        renderEdicionCompra();
+                    }
+                });
+                lista.appendChild(item);
+            });
+            openModal('modal-compra-prod-picker');
+        }
+
+        async function guardarEdicionCompra() {
+            const ed = compraEdit;
+            if (!ed) return;
+            const c = ed.compra;
+            const nuevas = Object.entries(ed.lineas).filter(([k, q]) => q > 0 && compraResolverClave(k));
+            if (nuevas.length === 0 && ed.fijos.length === 0) {
+                await customAlert('La compra no puede quedar vacía. Si quieres quitarla por completo, ciérrala y usa el botón de eliminar.', 'Compra vacía');
+                return;
+            }
+
+            // Cuánto había sumado antes esta compra a cada producto/variante, y cuánto suma ahora.
+            const antes = {};
+            (c.items || []).forEach(it => {
+                const r = compraResolverItem(it);
+                if (!r) return;
+                const k = compraClave(r.prod.id, r.gIdx, r.oIdx);
+                antes[k] = (antes[k] || 0) + (parseInt(it.qty) || 0);
+            });
+            const ahora = {};
+            nuevas.forEach(([k, q]) => { ahora[k] = q; });
+
+            new Set([...Object.keys(antes), ...Object.keys(ahora)]).forEach(k => {
+                const delta = (ahora[k] || 0) - (antes[k] || 0);
+                if (!delta) return;
+                const r = compraResolverClave(k);
+                if (r) compraAplicarStock(r, delta);
+            });
+
+            const itemsNuevos = nuevas.map(([k, q]) => {
+                const r = compraResolverClave(k);
+                const costo = ed.costos[k] !== undefined ? ed.costos[k] : r.costo;
+                return compraItemDesde(r, q, costo);
+            }).concat(ed.fijos);
+            c.items = itemsNuevos;
+            c.totalUSD = itemsNuevos.reduce((a, it) => a + (parseInt(it.qty) || 0) * (parseFloat(it.buyPrice) || 0), 0);
+
+            if (c.esPorPagar) {
+                gastoDeudaItems = gastoDeudaItems.filter(d => d.compraId !== c.id);
+                itemsNuevos.forEach(it => {
+                    gastoDeudaItems.push({
+                        id: Date.now() + Math.random(),
+                        compraId: c.id,
+                        proveedorId: c.proveedorId,
+                        descripcion: `${it.qty} ${it.productName} (compra)`,
+                        montoUSD: it.qty * it.buyPrice,
+                        fecha: c.fecha
+                    });
+                });
+            }
+
+            await closeModal('modal-compra-editar');
+            compraEdit = null;
+            renderProducts();
+            guardarYSincronizar();
+            refrescarVistasActivas();
+            abrirDetalleCompra(c);
+        }
+
+        document.getElementById('btn-cedit-cerrar').addEventListener('click', () => { closeModal('modal-compra-editar'); compraEdit = null; });
+        document.getElementById('btn-cedit-agregar').addEventListener('click', abrirSelectorProductoCompra);
+        document.getElementById('btn-cedit-guardar').addEventListener('click', guardarEdicionCompra);
+        document.getElementById('btn-cpp-cerrar').addEventListener('click', () => { closeModal('modal-compra-prod-picker'); });
+
 
         window.addEventListener('DOMContentLoaded', () => {
             cargarEstadoPersistido();
