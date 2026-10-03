@@ -26,11 +26,12 @@ self.addEventListener('push', (event) => {
     body: datos.body || '',
     tag: datos.tag || 'pedido',
     renotify: true,
-    // Si no viene una URL específica en el aviso, se usa la carpeta donde vive esta misma app
-    // (self.registration.scope), así no depende de cómo termines nombrando el archivo al
-    // publicarlo. El "#pedidos" es lo que hace que, al tocar la notificación, la app abra
-    // directo la lista de pedidos en vez de la pantalla de inicio.
-    data: { url: datos.url || (self.registration.scope + '#pedidos') }
+    // Si no viene una URL específica en el aviso, se arma apuntando a admin.html dentro de
+    // esta misma carpeta (self.registration.scope). El "#pedidos" es lo que hace que, al
+    // tocar la notificación, la app abra directo la lista de pedidos en vez de la pantalla
+    // de inicio. Antes esto apuntaba sin "admin.html", así que cuando no coincidía ninguna
+    // pestaña ya abierta, terminaba abriendo el catálogo por error.
+    data: { url: datos.url || (self.registration.scope + 'admin.html#pedidos') }
   };
 
   event.waitUntil(self.registration.showNotification(titulo, opciones));
@@ -38,19 +39,20 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const urlDestino = (event.notification.data && event.notification.data.url) || './';
+  const urlDestino = (event.notification.data && event.notification.data.url) || (self.registration.scope + 'admin.html#pedidos');
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((listaClientes) => {
-      // Si la app ya está abierta en alguna pestaña, la enfoca y le avisa que abra los
-      // pedidos, en vez de abrir una pestaña nueva encima de la que ya existe.
-      for (const cliente of listaClientes) {
-        if ('focus' in cliente) {
-          cliente.postMessage({ type: 'ABRIR_NOTIFICACIONES_PEDIDOS' });
-          return cliente.focus();
-        }
+      // Importante: el catálogo vive en el mismo sitio que la app madre, así que si estaba
+      // abierto en otra pestaña, ANTES se tomaba por error como si fuera la app madre (se
+      // enfocaba esa pestaña en vez de abrir la correcta). Ahora se busca específicamente
+      // una pestaña cuya dirección contenga "admin.html".
+      const clienteAdmin = listaClientes.find((c) => c.url.includes('admin.html'));
+      if (clienteAdmin && 'focus' in clienteAdmin) {
+        clienteAdmin.postMessage({ type: 'ABRIR_NOTIFICACIONES_PEDIDOS' });
+        return clienteAdmin.focus();
       }
-      // Si la app estaba totalmente cerrada, abre una pestaña nueva directo en los pedidos.
+      // No había ninguna pestaña de la app madre abierta: se abre una nueva, directo en pedidos.
       if (self.clients.openWindow) {
         return self.clients.openWindow(urlDestino);
       }
