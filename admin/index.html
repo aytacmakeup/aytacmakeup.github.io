@@ -8276,17 +8276,17 @@
             { nombre: 'nextVentaNumero', key: LS_NEXT_VENTA_NUMERO, get: () => nextVentaNumero, set: v => { const n = parseInt(v, 10); if (!isNaN(n)) nextVentaNumero = n; } }
         ];
 
-        // Limpieza ÚNICA de las categorías de prueba (solo estas cinco; productos y demás datos no se tocan).
-        // Se hace una vez sobre la copia local y una vez sobre la copia de la nube, y luego no vuelve
-        // a ejecutarse, así que las categorías reales que crees después (aunque se llamen igual) se respetan.
-        const CATEGORIAS_DE_PRUEBA = ['Alimentos', '÷', 'Z', 'Labiales', 'Polvos'];
+                // Ya NO se borran categorías automáticamente. Esta función ahora solo repara:
+        // si algún producto usa una categoría que falta en la lista, la vuelve a agregar.
+        // (El nombre se mantiene igual porque otras partes del código la llaman.)
         function limpiarCategoriasDePrueba(flagKey) {
-            try { if (localStorage.getItem(flagKey)) return false; } catch (e) { return false; }
             const antes = categories.length;
-            categories = categories.filter(c => !CATEGORIAS_DE_PRUEBA.includes(c));
-            try { localStorage.setItem(flagKey, '1'); } catch (e) {}
+            products.forEach(p => {
+                const c = (p && typeof p.category === 'string') ? p.category.trim() : '';
+                if (c && !categories.includes(c)) categories.push(c);
+            });
             return categories.length !== antes;
-        }
+                }
 
         let pedidosWeb = [];
         let __ultimoPedidosWebRaw = null;
