@@ -3083,8 +3083,13 @@
         // ===== BALANCE =====
         // (Balance: variables de estado más abajo, junto a su lógica)
 
-        function getFechaISO(date = new Date()) {
-            return date.toISOString().slice(0, 10);
+                function getFechaISO(date = new Date()) {
+            // Usa la fecha de TU teléfono (no la hora universal), para que lo registrado
+            // de noche no quede con la fecha del día siguiente.
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + d;
         }
 
         function formatearFechaCorta(date = new Date()) {
@@ -8285,7 +8290,19 @@
                 const c = (p && typeof p.category === 'string') ? p.category.trim() : '';
                 if (c && !categories.includes(c)) categories.push(c);
             });
-            return categories.length !== antes;
+                        // Repara fechas viejas: antes el "día" de cada venta, gasto y compra se calculaba
+            // con la hora universal, y lo registrado de noche quedaba con la fecha del día
+            // siguiente. Aquí se recalcula desde la hora exacta que ya estaba guardada.
+            let fechasCorregidas = false;
+            [ventasRegistradas, gastos, compras].forEach(lista => {
+                lista.forEach(r => {
+                    if (r && r.timestamp) {
+                        const correcta = getFechaISO(new Date(r.timestamp));
+                        if (r.fechaISO !== correcta) { r.fechaISO = correcta; fechasCorregidas = true; }
+                    }
+                });
+            });
+            return (categories.length !== antes) || fechasCorregidas;
                 }
 
         let pedidosWeb = [];
