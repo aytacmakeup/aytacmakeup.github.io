@@ -1835,6 +1835,7 @@
                 </button>
                 <h3 class="view-header-title">Clientes</h3>
                 <div class="view-header-actions">
+                    <button class="icon-action-btn" id="btn-clientes-edit-toggle" title="Editar clientes" aria-label="Editar clientes" style="background: transparent; box-shadow: none;"><i class="fi fi-rr-pencil"></i></button>
                     <button class="icon-action-btn" id="btn-clientes-search-toggle" style="background: transparent; box-shadow: none;"><i class="fi fi-rr-search"></i></button>
                 </div>
             </div>
@@ -1863,6 +1864,7 @@
                 </div>
             </div>
 
+            <div id="clientes-edit-hint" style="display: none; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: #FFF3C4; color: var(--text-dark); font-size: 0.85rem; font-weight: 600;">Toca un cliente para editar su nombre o teléfono.</div>
             <div id="clientes-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
         </div>
 
@@ -3052,6 +3054,8 @@
         let ventaEditandoBackup = null; // copia de la venta original + sus deudaItems, por si se cancela la edición
         let clientesViewContext = 'management'; // 'management' | 'venta-picker'
         let clientesSearchQuery = '';
+        let clientesEditMode = false;   // true cuando el lápiz de Clientes está activado
+        let clienteEditandoId = null;   // id del cliente que se está editando (null = creando uno nuevo)
         let clienteFormContext = 'venta'; // 'venta' | 'clientes-page'
         let deudasActiveTab = 'cobrar'; // 'cobrar' | 'pagar'
         let deudasSearchQuery = '';
@@ -4550,6 +4554,8 @@
             } else if(tabName === 'nueva-venta-pago') {
                 renderNuevaVentaPago();
             } else if(tabName === 'clientes') {
+                clientesEditMode = false;
+                actualizarModoEdicionClientes();
                 renderClientesList();
             } else if(tabName === 'deudas') {
                 renderDeudasView();
@@ -6840,6 +6846,7 @@
             // al cerrar 'modal-form-cliente' no vuelva a mostrarse este modal intermedio.
             document.getElementById('modal-crear-o-importar-contacto').classList.remove('active');
             document.getElementById('cliente-form').reset();
+            prepararFormCliente(null);
             clienteFormContext = 'venta';
             bringModalToFront(document.getElementById('modal-form-cliente'));
             document.getElementById('modal-form-cliente').classList.add('active');
@@ -6861,6 +6868,26 @@
             const telefono = document.getElementById('cliente-telefono').value.trim();
             if (!nombre || !telefono) {
                 await customAlert("Completa el nombre y el teléfono del cliente.", "Campos requeridos");
+                return;
+            }
+
+            if (clienteEditandoId !== null) {
+                const cli = clientes.find(c => c.id === clienteEditandoId);
+                if (cli) {
+                    const digitos = (s) => (s || '').replace(/\D/g, '');
+                    const repetido = digitos(telefono) && clientes.find(c => c.id !== cli.id && digitos(c.phone) === digitos(telefono));
+                    if (repetido) {
+                        await customAlert(`Ese teléfono ya pertenece a ${repetido.name}. Usa otro número.`, "Teléfono repetido");
+                        return;
+                    }
+                    cli.name = nombre;
+                    cli.phone = telefono;
+                    guardarYSincronizar();
+                }
+                await closeModal('modal-form-cliente');
+                prepararFormCliente(null);
+                this.reset();
+                renderClientesList();
                 return;
             }
 
@@ -6910,13 +6937,14 @@
                     <div class="catalog-item-left" style="gap: 12px;">
                         <div class="cliente-avatar">${cli.name.charAt(0).toUpperCase()}</div>
                         <div>
-                            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-dark);">${cli.name}</div>
-                            <div style="font-size: 0.82rem; color: var(--text-light);">${cli.phone}</div>
+                            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-dark);">${movEsc(cli.name)}</div>
+                            <div style="font-size: 0.82rem; color: var(--text-light);">${movEsc(cli.phone)}</div>
                         </div>
                     </div>
                     <i class="fi fi-rr-angle-right catalog-arrow"></i>
                 `;
                 row.addEventListener('click', async () => {
+                    if (clientesEditMode) { abrirEditarCliente(cli); return; }
                     if (clientesViewContext === 'venta-picker') {
                         clienteSeleccionadoVenta = cli.id;
                         switchTab('nueva-venta-pago');
@@ -6927,6 +6955,45 @@
                 container.appendChild(row);
             });
         }
+
+        // ---- Edición de clientes (lápiz) ----
+        function actualizarModoEdicionClientes() {
+            const btn = document.getElementById('btn-clientes-edit-toggle');
+            const hint = document.getElementById('clientes-edit-hint');
+            if (btn) {
+                btn.style.background = clientesEditMode ? 'var(--btn-dark)' : 'transparent';
+                btn.style.color = clientesEditMode ? '#fff' : '';
+            }
+            if (hint) hint.style.display = clientesEditMode ? 'block' : 'none';
+        }
+
+        // cli = cliente a editar, o null para dejar el formulario en modo "crear"
+        function prepararFormCliente(cli) {
+            clienteEditandoId = cli ? cli.id : null;
+            const modal = document.getElementById('modal-form-cliente');
+            modal.querySelector('.modal-top-title').innerText = cli ? 'Editar contacto' : 'Crear contacto';
+            modal.querySelector('.btn-create-submit').innerText = cli ? 'Guardar cambios' : 'Guardar cliente';
+            if (cli) {
+                document.getElementById('cliente-nombre').value = cli.name || '';
+                document.getElementById('cliente-telefono').value = (cli.phone === '(sin teléfono)') ? '' : (cli.phone || '');
+            }
+        }
+
+        function abrirEditarCliente(cli) {
+            clienteFormContext = 'clientes-page';
+            document.getElementById('cliente-form').reset();
+            prepararFormCliente(cli);
+            openModal('modal-form-cliente');
+        }
+
+        document.getElementById('btn-clientes-edit-toggle').addEventListener('click', () => {
+            clientesEditMode = !clientesEditMode;
+            actualizarModoEdicionClientes();
+            renderClientesList();
+        });
+
+        // Si se cierra el formulario sin guardar, vuelve a quedar en modo "crear".
+        document.getElementById('btn-close-form-cliente').addEventListener('click', () => { prepararFormCliente(null); });
 
         document.getElementById('btn-clientes-back').addEventListener('click', () => {
             switchTab(clientesViewContext === 'venta-picker' ? 'nueva-venta-pago' : 'inicio');
@@ -6960,6 +7027,7 @@
         document.getElementById('btn-agregar-cliente').addEventListener('click', () => {
             clienteFormContext = clientesViewContext === 'venta-picker' ? 'venta' : 'clientes-page';
             document.getElementById('cliente-form').reset();
+            prepararFormCliente(null);
             openModal('modal-form-cliente');
         });
 
