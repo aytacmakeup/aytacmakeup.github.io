@@ -2887,6 +2887,10 @@
                         <i class="fa-solid fa-cloud-arrow-down"></i>
                         <span>Respaldo de datos</span>
                     </div>
+                    <div class="cat-option-item" id="btn-seccion-delicada" style="color: #b23b3b;">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span>Sección delicada</span>
+                    </div>
                     <div class="cat-option-item" id="btn-notificaciones-push">
                         <i class="fa-solid fa-bell"></i>
                         <span id="texto-btn-notificaciones-push">Activar notificaciones de pedidos</span>
@@ -2921,6 +2925,33 @@
                         Restaurar reemplaza TODOS los datos actuales de esta app por los del archivo. No se puede deshacer.
                     </p>
                     <p id="respaldo-fecha-info" style="font-size: 12px; color: #6b6b6b; margin: 10px 0 0;"></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-overlay" id="modal-seccion-delicada">
+            <div class="category-modal-box" style="max-width: 440px;">
+                <div class="sheet-grabber"></div>
+                <div class="cat-modal-header">
+                    <h3 style="color: #b23b3b;">Sección delicada</h3>
+                    <button class="cat-close-x" id="btn-close-seccion-delicada">&times;</button>
+                </div>
+                <div style="padding: 4px 20px 20px;">
+                    <p style="font-size: 14px; font-weight: 700; color: #b23b3b; margin: 0 0 8px;">Reiniciar el negocio desde cero</p>
+                    <p style="font-size: 13px; color: #6b6b6b; line-height: 1.5; margin: 0 0 10px;">
+                        Se borrará, en este teléfono y en la nube: productos y categorías, ventas, compras, gastos, clientes, deudas, abonos, proveedores y los pedidos pendientes del catálogo. Los productos también desaparecen del catálogo público, y la numeración de ventas vuelve a 1.
+                    </p>
+                    <p style="font-size: 13px; color: #6b6b6b; line-height: 1.5; margin: 0 0 14px;">
+                        Se conservan: tu usuario y contraseña, las notificaciones de este teléfono y los datos del negocio (nombre, logo y horario), así tu catálogo seguirá con tu marca, pero sin productos. <strong>Esta acción no se puede deshacer.</strong> Si hay una posibilidad de que lo necesites, descarga un respaldo primero.
+                    </p>
+                    <button type="button" class="btn-outline-custom" id="btn-delicada-respaldo" style="width: 100%; margin-bottom: 16px;">
+                        <i class="fa-solid fa-download"></i>&nbsp; Descargar respaldo antes de borrar
+                    </button>
+                    <label for="input-delicada-confirmar" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">Para continuar, escribe la palabra <strong>CONFIRMAR</strong></label>
+                    <input type="text" id="input-delicada-confirmar" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CONFIRMAR" style="width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1.5px solid #ddd; border-radius: 12px; font-size: 1rem; margin-bottom: 14px;">
+                    <button type="button" class="btn-create-category-action" id="btn-delicada-ejecutar" disabled style="width: 100%; background: #b23b3b; color: #fff; opacity: 0.4;">
+                        Borrar todo y empezar de cero
+                    </button>
                 </div>
             </div>
         </div>
@@ -9093,6 +9124,99 @@
             }
             location.reload();
         }
+
+        // ===== SECCIÓN DELICADA: REINICIAR EL NEGOCIO DESDE CERO =====
+        // Orden pensado para no perder nada por error: PRIMERO se borra la nube (datos del
+        // negocio, catálogo público y pedidos; el nombre/logo/horario se conservan). Si algo falla ahí, no se toca nada en el
+        // teléfono y no se pierde información. Solo cuando la nube quedó limpia se vacía la
+        // memoria y el teléfono y se recarga la app, para que arranque de cero.
+        const PALABRA_REINICIO = 'CONFIRMAR';
+        let reinicioEnCurso = false;
+
+        function palabraReinicioValida(texto) {
+            return String(texto || '').trim().toUpperCase() === PALABRA_REINICIO;
+        }
+
+        async function borrarTodasLasFilas(tabla) {
+            const { data, error } = await sbClient.from(tabla).select('id');
+            if (error) throw error;
+            const ids = (data || []).map(f => f.id);
+            if (!ids.length) return;
+            const { error: errBorrar } = await sbClient.from(tabla).delete().in('id', ids);
+            if (errBorrar) throw errBorrar;
+        }
+
+        async function reiniciarNegocioDesdeCero() {
+            if (reinicioEnCurso) return;
+            if (!sbClient || !sesionActual) {
+                await customAlert('Para reiniciar necesitas tener internet y la sesión iniciada, así también se borra la copia de la nube. Si no, los datos volverían al abrir la app.', 'No se pudo reiniciar');
+                return;
+            }
+            reinicioEnCurso = true;
+            const btn = document.getElementById('btn-delicada-ejecutar');
+            btn.disabled = true;
+            btn.textContent = 'Borrando...';
+            try {
+                const valorVacio = (nombre) => (nombre === 'nextVentaNumero' ? 1 : []);
+                // 1) Nube. Los datos del negocio (nombre, logo, horario) NO se tocan.
+                const filas = TODAS_LAS_PARTES_APP_DATA
+                    .filter(({ nombre }) => nombre !== 'business')
+                    .map(({ nombre }) => ({ key: nombre, value: valorVacio(nombre), updated_at: new Date().toISOString() }));
+                const { error } = await sbClient.from('app_data').upsert(filas);
+                if (error) throw error;
+                await borrarTodasLasFilas('catalog_products');
+                await borrarTodasLasFilas('pedidos_web');
+            } catch (e) {
+                console.warn('No se pudo reiniciar la nube.', e);
+                reinicioEnCurso = false;
+                btn.textContent = 'Borrar todo y empezar de cero';
+                btn.disabled = !palabraReinicioValida(document.getElementById('input-delicada-confirmar').value);
+                await customAlert('No se pudo borrar en la nube (revisa tu conexión a internet e inténtalo de nuevo). No se borró nada en este teléfono, tus datos siguen a salvo.', 'No se pudo reiniciar');
+                return;
+            }
+
+            // 2) Memoria y teléfono (la nube ya quedó limpia)
+            products = []; categories = [];
+            nextVentaNumero = 1; pedidosWeb = [];
+            LISTAS_PERSISTIDAS_EXTRA.forEach(({ set }) => set([]));
+            __ultimosIdsCatalogoNube = new Set();
+            try {
+                localStorage.setItem(LS_PRODUCTS, '[]');
+                localStorage.setItem(LS_CATEGORIES, '[]');
+                localStorage.setItem(LS_PEDIDOS_WEB, '[]');
+                localStorage.setItem(LS_NEXT_VENTA_NUMERO, '1');
+                LISTAS_PERSISTIDAS_EXTRA.forEach(({ key }) => localStorage.setItem(key, '[]'));
+            } catch (e) { /* aun así se recarga: la nube ya está vacía */ }
+            location.reload();
+        }
+
+        (function conectarSeccionDelicada() {
+            const abrir = document.getElementById('btn-seccion-delicada');
+            const cerrar = document.getElementById('btn-close-seccion-delicada');
+            const input = document.getElementById('input-delicada-confirmar');
+            const ejecutar = document.getElementById('btn-delicada-ejecutar');
+            const respaldo = document.getElementById('btn-delicada-respaldo');
+            if (!abrir || !input || !ejecutar) return;
+
+            const refrescarBoton = () => {
+                const ok = palabraReinicioValida(input.value);
+                ejecutar.disabled = !ok || reinicioEnCurso;
+                ejecutar.style.opacity = ok ? '1' : '0.4';
+            };
+            abrir.addEventListener('click', async () => {
+                await closeModal('modal-catalogo-virtual-opciones');
+                input.value = '';
+                refrescarBoton();
+                openModal('modal-seccion-delicada');
+            });
+            cerrar.addEventListener('click', () => { input.value = ''; closeModal('modal-seccion-delicada'); });
+            input.addEventListener('input', refrescarBoton);
+            respaldo.addEventListener('click', () => descargarRespaldo());
+            ejecutar.addEventListener('click', () => {
+                if (!palabraReinicioValida(input.value)) return;
+                reiniciarNegocioDesdeCero();
+            });
+        })();
 
         const btnRespaldoDatos = document.getElementById('btn-respaldo-datos');
         const btnCloseRespaldoDatos = document.getElementById('btn-close-respaldo-datos');
