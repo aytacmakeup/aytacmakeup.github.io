@@ -1528,6 +1528,157 @@
         .login-offline-note{font-size:12px;color:#9a9a9a;margin-top:18px;max-width:300px;line-height:1.5;}
     </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <style id="tema-aytac">
+/* ===== TEMA AYTAC: ciruela + oro rosa. Solo estilos; no toca ninguna función ===== */
+:root{
+  --bg-app:#F5F0F3; --surface:#FFFFFF;
+  --brand-yellow:#D9A294; --brand-yellow-dark:#C98F86; --btn-yellow:#D9A294;
+  --text-dark:#261224; --text-light:#86788A; --btn-dark:#33152E; --btn-blue:#7A4B8C;
+  --radius:18px;
+  --ios-shadow:0 1px 2px rgba(42,18,38,.05),0 12px 28px -14px rgba(75,31,63,.22);
+  --f-display:'Sora','Manrope',system-ui,sans-serif;
+  --f-body:'Manrope',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+*{font-family:var(--f-body);letter-spacing:-.005em}
+body{background:var(--bg-app);line-height:1.2}
+button,input,select,textarea{line-height:1.2}
+.inv-dual-buttons button,.inv-dual-buttons>*{font-size:.88rem;padding-left:10px;padding-right:10px;letter-spacing:-.015em}
+
+/* Tipografía de títulos y cifras */
+.view-title,.view-header-title,.modal-top-title,.cat-modal-header h3,.pv-title,.cvi-title,.business-card-title{font-family:var(--f-display);letter-spacing:-.03em}
+.view-title{font-size:1.65rem;font-weight:700}
+.business-main-value,.sub-stat-value,.stat-card .value,.inv-metric-value,.balance-summary-total,.balance-split-value,.balance-row-amount,.pv-price,.vd-total-value,.ganancia-value,.stats-grid .value{font-family:var(--f-display);font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+
+/* Cabecera: limpia, sin barra amarilla */
+.top-header-yellow{background:transparent;border-bottom:none;box-shadow:none}
+.user-avatar-circle{background:linear-gradient(140deg,#4B1F3F,#8A4B62);color:#F1DCC3;box-shadow:0 6px 14px -6px rgba(75,31,63,.6)}
+.user-info-text h4{font-family:var(--f-display);font-weight:600}
+.icon-action-btn{background:#fff;box-shadow:var(--ios-shadow);color:#4B1F3F;transition:transform .18s,box-shadow .2s}
+.icon-action-btn:active{transform:scale(.92)}
+.bcv-ticker-bar{background:rgba(75,31,63,.07);border:1px solid rgba(75,31,63,.12);color:#4B1F3F}
+
+/* Tarjetas */
+.qa-card,.product-card,.stat-card,.inv-metric-card,.balance-summary-card,.venta-option-card,.balance-row{border:1px solid rgba(75,31,63,.06);transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .2s}
+.qa-card:active,.product-card:active,.venta-option-card:active{transform:scale(.975)}
+.qa-card.dark{background:linear-gradient(145deg,#4B1F3F,#2A1226);color:#F1DCC3}
+.product-img{background:linear-gradient(145deg,rgba(217,162,148,.22),rgba(75,31,63,.08))}
+
+/* Momento memorable: resumen del negocio en Inicio */
+#view-inicio .business-card{background:linear-gradient(150deg,#4B1F3F 0%,#2A1226 100%);border:none;position:relative;overflow:hidden;box-shadow:0 22px 44px -20px rgba(75,31,63,.75)}
+#view-inicio .business-card::before{content:"";position:absolute;width:260px;height:260px;right:-80px;top:-110px;border-radius:50%;background:radial-gradient(circle,rgba(217,162,148,.5),transparent 65%);pointer-events:none;animation:aureola 9s ease-in-out infinite alternate}
+#view-inicio .business-card>*{position:relative}
+#view-inicio .business-card-title{color:#F1DCC3}
+#view-inicio .business-main-value{color:#fff}
+#view-inicio .business-main-label,#view-inicio .sub-stat-label{color:rgba(241,220,195,.65)}
+#view-inicio .sub-stat-value{color:#F1DCC3}
+#view-inicio .sub-stat-value.green{color:#86E5AB}
+#view-inicio .sub-stat-value.red{color:#FFA39C}
+#view-inicio .business-divider{background:rgba(241,220,195,.14)}
+#view-inicio .business-vs-badge{background:rgba(134,229,171,.15);color:#86E5AB}
+#view-inicio .business-vs-badge.vs-ayer-down{background:rgba(255,163,156,.15);color:#FFA39C}
+#view-inicio .business-btn-action{background:linear-gradient(135deg,#F3E0C9,#D9A294);color:#2A1226;box-shadow:none}
+@keyframes aureola{from{transform:translate(0,0) scale(1);opacity:.75}to{transform:translate(-30px,34px) scale(1.18);opacity:1}}
+
+/* Botones principales */
+.btn-create-submit,.btn-pv-update.enabled,.business-btn-action{background:linear-gradient(135deg,#4B1F3F,#2A1226);color:#F1DCC3;box-shadow:0 10px 22px -10px rgba(75,31,63,.7)}
+.btn-dark-custom,.inv-main-action-btn,.btn-dark-variant{background:var(--btn-dark)}
+.badge-premium{background:linear-gradient(135deg,#F3E0C9,#D9A294);color:#2A1226}
+button{transition:transform .15s,filter .2s,box-shadow .2s}
+.btn-create-submit:active,.btn-dark-custom:active,.inv-main-action-btn:active,.business-btn-action:active{transform:scale(.97)}
+.filter-btn.active{background:var(--btn-dark);border-color:var(--btn-dark);color:#F1DCC3}
+.balance-tab.active,.pf-tab.active{background:none;color:#4B1F3F;border-bottom-color:#C98F86}
+.balance-tab,.pf-tab{background:none}
+.filter-btn.premium,.stats-periodo-btn.active{background:rgba(217,162,148,.22);color:#7A3E4F;border-color:rgba(201,143,134,.5)}
+.btn-link-add,.notif-icon.bajo-stock,.rotacion-tag.media{color:#7A3E4F}
+.notif-icon.bajo-stock,.rotacion-tag.media{background:rgba(217,162,148,.22)}
+input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,134,.22)}
+[style*="255, 199, 0"],[style*="255,199,0"]{background:rgba(217,162,148,.22)!important}
+[style*="#7a5d00"],[style*="#7A5D00"]{color:#7A3E4F!important}
+
+/* Barra inferior */
+.nav-menu{background:rgba(255,255,255,.9);border-top:1px solid rgba(75,31,63,.08);border-radius:24px 24px 0 0;box-shadow:0 -14px 32px -16px rgba(75,31,63,.28)}
+.nav-item{color:#9A8C9E;font-weight:600;transition:color .25s}
+.nav-item .nav-icon{padding:4px 16px;margin:-4px 0 -2px;line-height:1;border-radius:14px;transition:background .3s,color .3s}
+.nav-item .nav-text{line-height:1.2}
+.nav-item.active{color:#4B1F3F}
+.nav-item.active .nav-icon{background:linear-gradient(135deg,#4B1F3F,#2A1226);color:#F1DCC3;animation:pop .38s cubic-bezier(.3,1.6,.5,1)}
+@keyframes pop{from{transform:scale(.8)}to{transform:scale(1)}}
+
+/* Pantallas y ventanas */
+.modal-overlay{background:rgba(42,18,38,.5)}
+.modal-content-yellow,.category-modal-box{border-radius:28px 28px 0 0}
+.sheet-grabber{background:rgba(75,31,63,.2)}
+.vd-header-bar{background:linear-gradient(135deg,#4B1F3F,#2A1226);color:#F1DCC3;box-shadow:none}
+.vd-header-bar .view-header-title,.vd-header-bar .view-header-back-btn{color:#F1DCC3}
+
+/* Inicio de sesión */
+.login-screen{background:linear-gradient(160deg,#4B1F3F,#2A1226)}
+.login-screen .login-icon{background:linear-gradient(135deg,#F3E0C9,#D9A294);color:#2A1226}
+.login-screen h1{color:#F1DCC3;font-family:var(--f-display);font-size:24px;letter-spacing:-.03em}
+.login-screen p.sub{color:rgba(241,220,195,.7)}
+.login-screen label{color:rgba(241,220,195,.85)}
+.login-screen input{border:1px solid rgba(241,220,195,.25);border-radius:14px}
+.login-screen input:focus{border-color:#D9A294}
+.login-screen button[type=submit]{background:linear-gradient(135deg,#F3E0C9,#D9A294);color:#2A1226;padding:14px;border-radius:14px;font-weight:700}
+.login-error{color:#FFA39C}
+
+/* ===== MÁS MOVIMIENTO ===== */
+/* Cambio de sección: la pantalla aparece y cada bloque entra en cascada */
+.view.active{animation:velo .28s ease backwards}
+.view.active>*{animation:hijo .55s cubic-bezier(.2,.9,.25,1.05) backwards}
+.view.active>*:nth-child(1){animation-name:hijoTop;animation-delay:0s}
+.view.active>*:nth-child(2){animation-delay:.05s}
+.view.active>*:nth-child(3){animation-delay:.1s}
+.view.active>*:nth-child(4){animation-delay:.15s}
+.view.active>*:nth-child(5){animation-delay:.2s}
+.view.active>*:nth-child(6){animation-delay:.25s}
+.view.active>*:nth-child(n+7){animation-delay:.3s}
+@keyframes velo{from{opacity:0}to{opacity:1}}
+@keyframes hijo{from{opacity:0;translate:0 28px;scale:.96}to{opacity:1;translate:0 0;scale:1}}
+@keyframes hijoTop{from{opacity:0;translate:0 -16px}to{opacity:1;translate:0 0}}
+
+/* Tarjetas de las listas: aparecen con resorte al deslizar la pantalla */
+@supports (animation-timeline:view()){
+  .product-card,.balance-row,.confirmar-venta-item,.vd-section-card,.stat-card,.inv-metric-card,.balance-summary-card,.catalog-menu-item,.cat-option-item,.metodo-mov-item,.venta-option-card{
+    animation:revela linear both;animation-timeline:view();animation-range:entry 0% entry 40%}
+  #view-inicio .business-card::before{
+    animation:aureola 9s ease-in-out infinite alternate,deriva linear both;
+    animation-timeline:auto,scroll(nearest);animation-range:normal,0px 320px}
+}
+@keyframes revela{from{opacity:0;translate:0 34px;scale:.93}to{opacity:1;translate:0 0;scale:1}}
+@keyframes deriva{to{translate:-30px 110px}}
+
+/* Respuesta al toque: se hunde y rebota */
+.nav-item,.balance-row,.filter-btn,.cat-option-item,.catalog-menu-item,.payment-method-card,.segmented-btn,.balance-tab,.pf-tab,.icon-action-btn{transition:scale .35s cubic-bezier(.3,1.6,.5,1),color .25s,background .3s,border-color .3s}
+.nav-item:active,.balance-row:active,.filter-btn:active,.cat-option-item:active,.catalog-menu-item:active,.payment-method-card:active,.segmented-btn:active{scale:.93}
+.nav-item.active .nav-icon{animation:rebote .55s cubic-bezier(.3,1.7,.5,1)}
+.nav-item.active .nav-text{animation:sube .4s ease backwards}
+@keyframes rebote{0%{transform:scale(.6) translateY(8px)}60%{transform:scale(1.12) translateY(-3px)}100%{transform:scale(1) translateY(0)}}
+@keyframes sube{from{opacity:.3;translate:0 6px}to{opacity:1;translate:0 0}}
+
+/* Barras de acción: suben desde abajo al aparecer */
+.inv-dual-buttons,.sale-bottom-bar,.clientes-bottom-bar,.deudas-bottom-bar,.registrar-abono-bar,.crear-venta-bottom-bar,.confirmar-venta-bottom-bar,.svp-confirm-bar{animation:barraSube .6s cubic-bezier(.2,1.2,.3,1) .12s backwards}
+@keyframes barraSube{from{opacity:0;translate:0 46px}to{opacity:1;translate:0 0}}
+
+/* Ventanas emergentes: fondo que aparece y hoja con resorte */
+.modal-overlay.active{animation:velo .3s ease both}
+.modal-overlay.active .modal-content-yellow{animation-duration:.5s;animation-timing-function:cubic-bezier(.2,1.1,.3,1)}
+.modal-overlay.active .category-modal-box{animation:hoja .5s cubic-bezier(.2,1.1,.3,1) both}
+@keyframes hoja{from{opacity:0;translate:0 60px;scale:.97}to{opacity:1;translate:0 0;scale:1}}
+
+/* Botones principales: brillo que cruza de vez en cuando */
+.btn-create-submit,.business-btn-action{position:relative;overflow:hidden}
+.btn-create-submit::after,.business-btn-action::after{content:"";position:absolute;top:0;bottom:0;left:-60%;width:40%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.35),transparent);transform:skewX(-20deg);pointer-events:none;animation:brillo 4.5s ease-in-out 1.2s infinite}
+@keyframes brillo{0%,55%{left:-60%}100%{left:130%}}
+.avatar-latido,.user-avatar-circle{animation:latido 3.6s ease-in-out infinite}
+@keyframes latido{0%,100%{box-shadow:0 6px 14px -6px rgba(75,31,63,.6)}50%{box-shadow:0 6px 22px -4px rgba(201,143,134,.85)}}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+    </style>
 </head>
 <body>
 
