@@ -8642,6 +8642,79 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
 
         let sesionActual = null; // sesión de Supabase ya autenticada, o null si aún no
 
+        // ----------------------------------------------------------------------------
+        // PROTECCIÓN CONTRA PÉRDIDA DE DATOS (arreglo del problema de "se guardan y luego
+        // desaparecen"). Antes, al abrir la app, la copia de la nube SIEMPRE reemplazaba a la
+        // del teléfono, incluso si en el teléfono había cambios que todavía no habían llegado a
+        // la nube (por ejemplo, porque la subida falló o se cortó al cerrar la app). Ahora se
+        // guarda una "huella" de lo último que la nube confirmó haber recibido de cada parte
+        // (productos, ventas, etc.). Si al abrir la app lo del teléfono NO coincide con esa
+        // huella, significa que hay cambios sin subir, y entonces se conservan y se suben en
+        // vez de ser reemplazados.
+        // ----------------------------------------------------------------------------
+        const LS_NUBE_FIRMAS = 'bcv_inv_nube_firmas_v1';
+        let __sincronizacionInicialLista = false; // no se sube nada hasta decidir qué copia manda
+        let __subidaNubeEnCurso = false;          // evita subidas encimadas unas sobre otras
+        let __fallosSubidaSeguidos = 0;
+        let __avisoErrorNubeMostrado = false;
+
+        function hashTexto(str) {
+            let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+            for (let i = 0, ch; i < str.length; i++) {
+                ch = str.charCodeAt(i);
+                h1 = Math.imul(h1 ^ ch, 2654435761);
+                h2 = Math.imul(h2 ^ ch, 1597334677);
+            }
+            h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+            h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+            return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + ':' + str.length;
+        }
+
+        function leerFirmasNube() {
+            try {
+                const o = JSON.parse(localStorage.getItem(LS_NUBE_FIRMAS) || '{}');
+                return (o && typeof o === 'object') ? o : {};
+            } catch (e) { return {}; }
+        }
+        function guardarFirmasNube(firmas) {
+            try { localStorage.setItem(LS_NUBE_FIRMAS, JSON.stringify(firmas)); } catch (e) { /* no es crítico */ }
+        }
+
+        // ¿Esta parte está "vacía" en el teléfono? (sirve para el caso de un teléfono nuevo o
+        // con el navegador borrado: ahí NO hay nada que proteger y manda la nube).
+        function parteSinDatosLocales(nombre, valor) {
+            if (valor === null || valor === undefined) return true;
+            if (Array.isArray(valor)) return valor.length === 0;
+            if (nombre === 'nextVentaNumero') return !(Number(valor) > 1);
+            if (typeof valor === 'object') return true; // datos del negocio: se fusionan, no hay riesgo
+            return false;
+        }
+
+        // Después de decidir qué copia manda, marca como "ya sincronizadas" las partes del
+        // teléfono cuya huella coincide con la última confirmada (así no se vuelven a subir
+        // sin necesidad ni pisan datos más nuevos de la nube si no se pudo consultar).
+        function marcarPartesSincronizadasSegunFirmas() {
+            const firmas = leerFirmasNube();
+            TODAS_LAS_PARTES_APP_DATA.forEach(({ nombre, get }, i) => {
+                if (__ultimosPartesEnviadosNube[i] !== null) return;
+                const str = JSON.stringify(get());
+                if (firmas[nombre] && firmas[nombre] === hashTexto(str)) __ultimosPartesEnviadosNube[i] = str;
+            });
+        }
+
+        // Antes los fallos al subir a la nube solo quedaban en la consola (invisible). Ahora,
+        // si el problema NO es simplemente falta de internet, se avisa en pantalla.
+        function manejarFalloSubidaNube(e) {
+            __fallosSubidaSeguidos++;
+            console.warn('No se pudo guardar en la nube; se reintentará solo. Tus datos siguen a salvo en este teléfono.', e);
+            const msg = (e && (e.message || e.details || e.name)) ? String(e.message || e.details || e.name) : String(e);
+            const esRed = !navigator.onLine || /failed to fetch|networkerror|load failed|network request failed|timeout|abort/i.test(msg);
+            if (!esRed && __fallosSubidaSeguidos >= 3 && !__avisoErrorNubeMostrado) {
+                __avisoErrorNubeMostrado = true;
+                customAlert('Tus cambios están guardados en este teléfono, pero NO se han podido subir a la nube.\n\nNo cierres sesión ni borres los datos del navegador hasta resolverlo.\n\nDetalle técnico: ' + msg, 'Aviso: no se está guardando en la nube');
+            }
+        }
+
         function traducirErrorLogin(error) {
             const msg = (error && error.message) || '';
             if (/Invalid login credentials/i.test(msg)) return 'Correo o contraseña incorrectos.';
@@ -8679,12 +8752,30 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
                 const porNombre = {};
                 data.forEach(fila => { porNombre[fila.key] = fila.value; });
                 let huboCambios = false;
-                TODAS_LAS_PARTES_APP_DATA.forEach(({ nombre, get, set }) => {
+                // IMPORTANTE: esta decisión se toma AQUÍ, justo después de recibir la respuesta
+                // de la nube (no antes), para no pisar nada que se haya creado en el teléfono
+                // mientras la descarga estaba en curso.
+                const firmas = leerFirmasNube();
+                TODAS_LAS_PARTES_APP_DATA.forEach(({ nombre, get, set }, i) => {
                     if (!Object.prototype.hasOwnProperty.call(porNombre, nombre)) return;
                     const antes = JSON.stringify(get());
+                    const firmaGuardada = firmas[nombre];
+                    const hayCambiosSinSubir = firmaGuardada
+                        ? (firmaGuardada !== hashTexto(antes))
+                        : !parteSinDatosLocales(nombre, get());
+                    if (hayCambiosSinSubir) {
+                        console.warn('Hay cambios en este teléfono que no habían llegado a la nube (' + nombre + '). Se conservan y se subirán.');
+                        return; // se queda lo del teléfono; la próxima subida lo manda a la nube
+                    }
                     set(porNombre[nombre]);
-                    if (JSON.stringify(get()) !== antes) huboCambios = true;
+                    const despues = JSON.stringify(get());
+                    if (despues !== antes) huboCambios = true;
+                    if (despues === JSON.stringify(porNombre[nombre])) {
+                        __ultimosPartesEnviadosNube[i] = despues; // ya es idéntico a la nube: no hace falta subirlo
+                        firmas[nombre] = hashTexto(despues);
+                    }
                 });
+                guardarFirmasNube(firmas);
                 if (limpiarCategoriasDePrueba('bcv_cat_cleanup_cloud_v1')) huboCambios = true;
                 // Recuerda qué productos ya estaban publicados en el catálogo, para poder borrar
                 // los que ya no correspondan la primera vez que se publique desde este dispositivo.
@@ -8821,19 +8912,29 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
         let __ultimosPartesEnviadosNube = TODAS_LAS_PARTES_APP_DATA.map(() => null);
         async function sincronizarDatosConNube() {
             if (!sbClient || !sesionActual) return;
-            const paraEnviar = [];
-            TODAS_LAS_PARTES_APP_DATA.forEach(({ nombre, get }, i) => {
-                const str = JSON.stringify(get());
-                if (str !== __ultimosPartesEnviadosNube[i]) paraEnviar.push({ i, nombre, str, value: get() });
-            });
-            if (!paraEnviar.length) return;
+            if (!__sincronizacionInicialLista) return; // aún se está decidiendo qué copia manda
+            if (__subidaNubeEnCurso) return;           // ya hay una subida en marcha: no se encima otra
+            __subidaNubeEnCurso = true;
             try {
-                const filas = paraEnviar.map(({ nombre, value }) => ({ key: nombre, value, updated_at: new Date().toISOString() }));
-                const { error } = await sbClient.from('app_data').upsert(filas);
-                if (error) throw error;
-                paraEnviar.forEach(({ i, str }) => { __ultimosPartesEnviadosNube[i] = str; });
+                const firmas = leerFirmasNube();
+                // Una parte por vez: si una falla, las que ya subieron quedan confirmadas, y
+                // una foto pesada en "productos" no bloquea ventas, gastos, etc.
+                for (let i = 0; i < TODAS_LAS_PARTES_APP_DATA.length; i++) {
+                    const { nombre, get } = TODAS_LAS_PARTES_APP_DATA[i];
+                    const value = get();
+                    const str = JSON.stringify(value);
+                    if (str === __ultimosPartesEnviadosNube[i]) continue;
+                    const { error } = await sbClient.from('app_data').upsert({ key: nombre, value, updated_at: new Date().toISOString() });
+                    if (error) throw error;
+                    __ultimosPartesEnviadosNube[i] = str;
+                    firmas[nombre] = hashTexto(str); // la nube confirmó que recibió exactamente esto
+                    guardarFirmasNube(firmas);
+                }
+                __fallosSubidaSeguidos = 0;
             } catch (e) {
-                console.warn('No se pudo guardar en la nube; se reintentará solo. Tus datos siguen a salvo en este teléfono.', e);
+                manejarFalloSubidaNube(e);
+            } finally {
+                __subidaNubeEnCurso = false;
             }
         }
 
@@ -8845,6 +8946,7 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
         let __ultimosIdsCatalogoNube = new Set();
         async function sincronizarCatalogoConNube() {
             if (!sbClient || !sesionActual) return;
+            if (!__sincronizacionInicialLista) return;
             const filasProductos = construirFilasCatalogoProductos();
             const filaNegocio = construirFilaCatalogoNegocio();
             const comparable = JSON.stringify({ p: filasProductos, n: filaNegocio });
@@ -8961,8 +9063,14 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
         }
 
         async function sincronizarAlIniciarSesion() {
-            const cambio = await cargarEstadoDesdeNube();
-            await cargarPedidosWebDesdeNube();
+            let cambio = false;
+            try {
+                cambio = await cargarEstadoDesdeNube();
+                await cargarPedidosWebDesdeNube();
+            } finally {
+                marcarPartesSincronizadasSegunFirmas();
+                __sincronizacionInicialLista = true; // ahora sí se permite subir cambios a la nube
+            }
             if (cambio) {
                 // La copia local pudo ser vieja o de otro dispositivo: se vuelve a dibujar la
                 // pantalla activa con los datos reales que acaban de llegar de la nube.
@@ -9161,6 +9269,15 @@ input:focus{border-color:var(--brand-yellow);box-shadow:0 0 0 4px rgba(201,143,1
         }
 
         setInterval(() => { guardarYSincronizar(); revisarPedidosWebNuevos(); }, 2500);
+
+        // Al minimizar o cerrar la app, se deja todo escrito en el teléfono de inmediato y se
+        // intenta subir a la nube. Si no alcanza a subirse, la huella de arriba garantiza que
+        // en la próxima apertura esos cambios se conserven y se suban (ya no se pierden).
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') guardarYSincronizar();
+        });
+        window.addEventListener('pagehide', () => { guardarYSincronizar(); });
+        window.addEventListener('online', () => { guardarYSincronizar(); });
 
         // ============================================================================
         // RESPALDO Y RESTAURACIÓN
